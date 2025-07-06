@@ -106,7 +106,7 @@ ethtool -K ${IFACE} gro off lro off gso off tso off ufo off sg off
 - Ingress: A specific dport in TCP-in-UDP
 - Egress: A specific sport in TCP
 
-## In Detail
+## Packet Data Modification
 
 ```
 tcphdr
@@ -144,4 +144,77 @@ bit 96 - 111	Data Offset and Flags
 bit 112 - 127	Window
 bit 128 - 143	Checksum (A change, nothing needed to do, BPF helper will calculate)
 bit 144 - 159	Urgent Pointer (A change, set it to 0)
+```
+
+## Checksum Computation
+
+### TCP
+```
+                  0      7 8     15 16    23 24    31
+                 +--------+--------+--------+--------+
+                 |          source address           |
+                 +--------+--------+--------+--------+
+                 |        destination address        |
+                 +--------+--------+--------+--------+
+                 |  zero  |   TCP  |   UDP length    |
+                 +--------+--------+--------+--------+
+
+ 0                   1                   2                   3
+ 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|          Source Port          |       Destination Port        |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                        Sequence Number                        |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                    Acknowledgment Number                      |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|  Data |       |C|E|U|A|P|R|S|F|                               |
+| Offset| Rsrvd |W|C|R|C|S|S|Y|I|            Window             |
+|       |       |R|E|G|K|H|T|N|N|                               |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|           Checksum            |         Urgent Pointer        |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                              ...                              |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+```
+
+### TCP-in-UDP
+```
+                  0      7 8     15 16    23 24    31
+                 +--------+--------+--------+--------+
+                 |          source address           |
+                 +--------+--------+--------+--------+
+                 |        destination address        |
+                 +--------+--------+--------+--------+
+                 |  zero  |   UDP  |   UDP length    |
+                 +--------+--------+--------+--------+
+
+ 0                   1                   2                   3
+ 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|          Source Port          |       Destination Port        |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|            Length             |           Checksum            |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                    Acknowledgment Number                      |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|  Data |       |C|E|U|A|P|R|S|F|                               |
+| Offset| Rsrvd |W|C|R|C|S|S|Y|I|            Window             |
+|       |       |R|E|G|K|H|T|N|N|                               |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                        Sequence Number                        |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                              ...                              |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+```
+
+```
+Modify IPv4 header: change checksum: calculate checksum. old data: bpf_htons(proto_old), new data: bpf_htons(proto)
+Modify TCP header: change checksum: calculate checksum. old data: bpf_htons(proto_old), new data: bpf_htons(proto)
+Modify TCP-in-UDP header: change checksum: calculate checksum. old data: urgent pointer (0), new data: length
+
+Modify IPv4 header: change protocol: set from TCP to UDP.
+Modify TCP-in-UDP header: tinuhdr_addr->udphdr.len = bpf_htons(ip_payload_len);
+Modify TCP-in-UDP header: tinuhdr_addr->udphdr.check = tcphdr_addr->check;
+Modify TCP-in-UDP header: tinuhdr_addr->seq = tcphdr_addr->seq;
 ```
