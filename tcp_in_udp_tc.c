@@ -40,58 +40,6 @@ enum direction {
 	INGRESS,
 };
 
-static __u16 ip_checksum(void *vdata, __u32 length)
-{
-	/* Cast the data to 16 bit chunks */
-	__u16 *data = vdata;
-	__u32 sum = 0;
-
-	while (length > 1) {
-		sum += *data++;
-		length -= 2;
-	}
-
-	/* Add left-over byte, if any */
-	if (length > 0)
-		sum += *(unsigned char *)data;
-
-	/* Fold 32-bit sum to 16 bits */
-	while (sum >> 16)
-		sum = (sum & 0xffff) + (sum >> 16);
-
-	return ~sum;
-}
-
-static __sum16 udp_checksum(struct __sk_buff *skb_addr, struct iphdr *iphdr_addr, struct tcphdr *tcphdr_addr, int ip_payload_len)
-{
-	struct pseudo_header {
-		__u32 source_address;
-		__u32 dest_address;
-		__u8 placeholder;
-		__u8 protocol;
-		__u16 payload_len;
-	};
-
-	struct {
-		struct pseudo_header hdr;
-		unsigned char ip_payload_max[IP_MAX_PAYLOAD];
-	} buffer;
-
-	/* Fill pseudo header */
-	buffer.hdr.source_address = iphdr_addr->saddr;
-	buffer.hdr.dest_address = iphdr_addr->daddr;
-	buffer.hdr.placeholder = 0;
-	buffer.hdr.protocol = IPPROTO_UDP;
-	buffer.hdr.payload_len = bpf_htons(ip_payload_len);
-
-	/* Copy UDP header and UDP payload */
-	bpf_skb_load_bytes(skb_addr, (void *)tcphdr_addr - (void *)(long)skb_addr->data, &buffer.ip_payload_max[0],
-			   ip_payload_len);
-
-	/* Calculate checksum */
-	return ip_checksum(&buffer, sizeof(struct pseudo_header) + ip_payload_len);
-}
-
 static __always_inline void tinu_to_tcp(struct __sk_buff *skb_addr,
 					struct iphdr *iphdr_addr,
 					struct ipv6hdr *ipv6hdr_addr,
@@ -108,15 +56,22 @@ static __always_inline void tinu_to_tcp(struct __sk_buff *skb_addr,
 			   tinu_hdr_len);
 	tcphdr_addr = (struct tcphdr *)buffer;
 	tcphdr_addr->seq = tinuhdr_addr->seq;
+	tcphdr_addr->check = 0;
 	tcphdr_addr->urg_ptr = 0;
 	bpf_skb_store_bytes(skb_addr, (void *)tinuhdr_addr - data_addr,
 			    buffer, tinu_hdr_len, 0);
 
 	/* Change protocol from UDP to TCP on the IP header. */
 	if (iphdr_addr) {
+		__u8 proto_old = IPPROTO_UDP;
+
 		bpf_skb_store_bytes(skb_addr,
 				    (void *)&iphdr_addr->protocol - data_addr,
 				    &proto, sizeof(proto), 0);
+
+		bpf_l3_csum_replace(skb_addr,
+				    (void *)&iphdr_addr->check - data_addr,
+				    bpf_htons(proto_old), bpf_htons(proto), 2);
 	} else if (ipv6hdr_addr) {
 		bpf_skb_store_bytes(skb_addr,
 				    (void *)&ipv6hdr_addr->nexthdr -
@@ -157,14 +112,6 @@ static __always_inline void tcp_to_tinu(struct __sk_buff *skb_addr,
 		bpf_l3_csum_replace(skb_addr,
 				    (void *)&iphdr_addr->check - data_addr,
 				    bpf_htons(proto_old), bpf_htons(proto), 2);
-
-		__sum16 udp_check =
-		    bpf_htons(udp_checksum(skb_addr, iphdr_addr, tcphdr_addr, ip_payload_len));
-
-		bpf_skb_store_bytes(skb_addr,
-				    (void *)&tcphdr_addr +
-				    offsetof(struct udphdr, check) - data_addr,
-				    &udp_check, sizeof(udp_check), 0);
 	} else if (ipv6hdr_addr) {
 		bpf_skb_store_bytes(skb_addr,
 				    (void *)&ipv6hdr_addr->nexthdr -
