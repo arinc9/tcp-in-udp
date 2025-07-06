@@ -88,35 +88,44 @@ static __always_inline void tcp_to_tinu(struct __sk_buff *skb_addr,
 	int ip_payload_len = (void *)(long)skb_addr->data_end - (void *)tcphdr_addr;
 	int tcp_hdr_len = data_hdr_end_addr - (void *)tcphdr_addr;
 	void *data_addr = (void *)(long)skb_addr->data;
+	void *data_end_addr = (void *)(long)skb_addr->data_end;
 	unsigned char tcp_hdr_max[TCP_MAX_HEADER];
 	struct tinuhdr *tinuhdr_addr;
 	__u8 proto = IPPROTO_UDP;
-
-	bpf_skb_load_bytes(skb_addr, (void *)tcphdr_addr - data_addr, tcp_hdr_max,
-			   tcp_hdr_len);
-	tinuhdr_addr = (struct tinuhdr *)tcp_hdr_max;
-	tinuhdr_addr->udphdr.len = bpf_htons(ip_payload_len);
-	tinuhdr_addr->udphdr.check = 0;
-	tinuhdr_addr->seq = tcphdr_addr->seq;
-	bpf_skb_store_bytes(skb_addr, (void *)tcphdr_addr - data_addr,
-			    tcp_hdr_max, tcp_hdr_len, 0);
 
 	/* Change protocol from TCP to UDP on the IP header. */
 	if (iphdr_addr) {
 		__u8 proto_old = IPPROTO_TCP;
 
-		bpf_skb_store_bytes(skb_addr,
-				    (void *)&iphdr_addr->protocol - data_addr,
-				    &proto, sizeof(proto), 0);
-
 		bpf_l3_csum_replace(skb_addr,
 				    (void *)&iphdr_addr->check - data_addr,
 				    bpf_htons(proto_old), bpf_htons(proto), 2);
+
+		bpf_l4_csum_replace(skb_addr,
+				    (void *)&tcphdr_addr->check - data_addr,
+				    bpf_htons(proto_old), bpf_htons(proto), BPF_F_PSEUDO_HDR | 2);
+
+		bpf_l4_csum_replace(skb_addr,
+				    (void *)&tcphdr_addr->check - data_addr,
+				    0, bpf_htons(ip_payload_len), BPF_F_PSEUDO_HDR | 2);
+
+		bpf_skb_store_bytes(skb_addr,
+				    (void *)&iphdr_addr->protocol - data_addr,
+				    &proto, sizeof(proto), 0);
 	} else if (ipv6hdr_addr) {
 		bpf_skb_store_bytes(skb_addr,
 				    (void *)&ipv6hdr_addr->nexthdr -
 				    data_addr, &proto, sizeof(proto), 0);
 	}
+
+	bpf_skb_load_bytes(skb_addr, (void *)tcphdr_addr - data_addr, tcp_hdr_max,
+			   tcp_hdr_len);
+	tinuhdr_addr = (struct tinuhdr *)tcp_hdr_max;
+	tinuhdr_addr->udphdr.len = bpf_htons(ip_payload_len);
+	tinuhdr_addr->udphdr.check = tcphdr_addr->check;
+	tinuhdr_addr->seq = tcphdr_addr->seq;
+	bpf_skb_store_bytes(skb_addr, (void *)tcphdr_addr - data_addr,
+			    tcp_hdr_max, tcp_hdr_len, 0);
 }
 
 int tc_action(struct __sk_buff *skb_addr, enum direction dir, enum side side)
