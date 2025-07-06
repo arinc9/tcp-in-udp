@@ -27,7 +27,6 @@ struct tinuhdr {
 };
 
 #define TCP_MAX_HEADER	60
-#define IP_MAX_PAYLOAD	1480
 #define PORT		5201
 
 enum side {
@@ -91,7 +90,10 @@ static __always_inline void tcp_to_tinu(struct __sk_buff *skb_addr,
 	__u8 proto = IPPROTO_UDP, proto_old = IPPROTO_TCP;
 	void *data_addr = (void *)(long)skb_addr->data;
 	unsigned char tcp_hdr_max[TCP_MAX_HEADER];
+	struct tcphdr *cpy_tcphdr_addr;
 	struct tinuhdr *tinuhdr_addr;
+	__sum16 csum;
+	__be32 seq;
 
 	/* Change protocol from TCP to UDP on the IP header. */
 	if (iphdr_addr) {
@@ -119,10 +121,13 @@ static __always_inline void tcp_to_tinu(struct __sk_buff *skb_addr,
 
 	bpf_skb_load_bytes(skb_addr, (void *)tcphdr_addr - data_addr,
 			   tcp_hdr_max, tcp_hdr_len);
+	cpy_tcphdr_addr = (struct tcphdr *)tcp_hdr_max;
+	csum = cpy_tcphdr_addr->check;
+	seq = cpy_tcphdr_addr->seq;
 	tinuhdr_addr = (struct tinuhdr *)tcp_hdr_max;
 	tinuhdr_addr->udphdr.len = bpf_htons(ip_payload_len);
-	tinuhdr_addr->udphdr.check = tcphdr_addr->check;
-	tinuhdr_addr->seq = tcphdr_addr->seq;
+	tinuhdr_addr->udphdr.check = csum;
+	tinuhdr_addr->seq = seq;
 	bpf_skb_store_bytes(skb_addr, (void *)tcphdr_addr - data_addr,
 			    tcp_hdr_max, tcp_hdr_len, 0);
 }
