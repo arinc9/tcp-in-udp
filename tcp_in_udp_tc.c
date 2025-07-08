@@ -40,6 +40,81 @@ enum direction {
 	INGRESS,
 };
 
+static __wsum csum_partial(const void *buf, __u16 len, void *data_end)
+{
+	__u16 *p = (__u16 *)buf;
+	int num_u16 = len >> 1;
+	__wsum sum = 0;
+	int i;
+
+	if (len > 1480 || buf + len != data_end) {
+		bpf_printk("we don't have the end of the packet (len:%u)...\n", len);
+		return 0;
+	}
+
+	for (i = 0; i < 740; i++) {
+		if ((void *)(p + i + 1) > data_end)
+			break;
+		sum += p[i];
+	}
+
+	/* left-over byte, if any */
+	if (len % 2 != 0) {
+		i <<= 1;
+		if (buf + i >= data_end) {
+			bpf_printk("csum: cannot get the end from len:%u i:%d\n", len, i);
+			return sum;
+		}
+		sum += *((__u8 *)(buf + i));
+	}
+
+	return sum;
+}
+
+static __u16 csum_fold(__u32 csum)
+{
+	csum = (csum & 0xffff) + (csum >> 16);
+	csum = (csum & 0xffff) + (csum >> 16);
+
+	return (__u16)~csum;
+}
+
+static inline __sum16 csum_tcpudp_magic(__be32 saddr, __be32 daddr,
+					__u32 len, __u8 proto,
+					__wsum csum)
+{
+	__u64 s = csum;
+
+	s += (__u32)saddr;
+	s += (__u32)daddr;
+	s += bpf_htons(proto + len);
+	s = (s & 0xffffffff) + (s >> 32);
+	s = (s & 0xffffffff) + (s >> 32);
+
+	return csum_fold((__u32)s) ? : 0xffff;
+}
+
+//typedef __u16 __sum16;
+static __always_inline __sum16
+tcp_checksum(struct __sk_buff *skb, __u8 ip_off, __u8 udp_off, int ip_payload_len)
+{
+	void *data_end = (void *)(long)skb->data_end;
+	void *data = (void *)(long)skb->data;
+	struct iphdr *iph = data + ip_off;
+	struct tinuhdr *udph = data + udp_off;
+	unsigned long sum;
+
+	if ((void *)iph + sizeof(*iph) > data_end ||
+	    (void *)udph + sizeof(*udph) > data_end) {
+		bpf_printk("udp checksum size not OK\n");
+		return -1;
+	}
+
+	sum = csum_partial(udph, bpf_ntohs(ip_payload_len), data_end);
+	return csum_tcpudp_magic(iph->saddr, iph->daddr, bpf_ntohs(ip_payload_len),
+				 IPPROTO_UDP, sum);
+}
+
 static __always_inline void tinu_to_tcp(struct __sk_buff *skb_addr,
 					struct iphdr *iphdr_addr,
 					struct ipv6hdr *ipv6hdr_addr,
@@ -51,6 +126,10 @@ static __always_inline void tinu_to_tcp(struct __sk_buff *skb_addr,
 	char buffer[TCP_MAX_HEADER];
 	struct tcphdr *tcphdr_addr;
 	__u8 proto = IPPROTO_TCP;
+	__sum16 diff_csum;
+	int ip_off = (void *)iphdr_addr - data_addr;
+	int tinu_off = (void *)tinuhdr_addr - data_addr;
+	int ip_payload_len = (void *)(long)skb_addr->data_end - (void *)tinuhdr_addr;
 
 	bpf_skb_load_bytes(skb_addr, (void *)tinuhdr_addr - data_addr, buffer,
 			   tinu_hdr_len);
@@ -72,6 +151,11 @@ static __always_inline void tinu_to_tcp(struct __sk_buff *skb_addr,
 		bpf_l3_csum_replace(skb_addr,
 				    (void *)&iphdr_addr->check - data_addr,
 				    bpf_htons(proto_old), bpf_htons(proto), 2);
+
+		// diff_csum = tcp_checksum(skb_addr, iphdr_addr, tinuhdr_addr);
+		diff_csum = tcp_checksum(skb_addr, ip_off, tinu_off, ip_payload_len);
+		bpf_skb_store_bytes(skb_addr, ((void *)tinuhdr_addr - data_addr) + offsetof(struct tcphdr, check),
+				    &diff_csum, sizeof(diff_csum), 0);
 	} else if (ipv6hdr_addr) {
 		bpf_skb_store_bytes(skb_addr,
 				    (void *)&ipv6hdr_addr->nexthdr -
