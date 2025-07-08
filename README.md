@@ -125,24 +125,24 @@ tcphdr to tinuhdr
 bit 0 - 15	Source Port
 bit 16 - 31	Destination Port
 bit 32 - 47	Length (A change, must be calculated)
-bit 48 - 63	Checksum (A change, nothing needed to do, BPF helper will calculate)
+bit 48 - 63	Checksum (A change, must be calculated manually or with bpf_l4_csum_replace helper)
 bit 64 - 79	Acknowledgment Number First Half
 bit 80 - 95	Acknowledgment Number Second Half
 bit 96 - 111	Data Offset and Flags
 bit 112 - 127	Window
-bit 128 - 143	Sequence Number First Half (A change, read it from tcphdr_addr->seq)
-bit 144 - 159	Sequence Number Second Half (A change, read it from tcphdr_addr->seq)
+bit 128 - 143	Sequence Number First Half (A change, read it from Sequence Number field of TCP header)
+bit 144 - 159	Sequence Number Second Half (A change, read it from Sequence Number field of TCP header)
 
 tinuhdr to tcphdr
 bit 0 - 15	Source Port
 bit 16 - 31	Destination Port
-bit 32 - 47	Sequence Number First Half (A change, read it from tinuhdr->seq)
-bit 48 - 63	Sequence Number Second Half (A change, read it from tinuhdr->seq)
+bit 32 - 47	Sequence Number First Half (A change, read it from Sequence Number field of TCP-in-UDP header)
+bit 48 - 63	Sequence Number Second Half (A change, read it from Sequence Number field of TCP-in-UDP header)
 bit 64 - 79	Acknowledgment Number First Half
 bit 80 - 95	Acknowledgment Number Second Half
 bit 96 - 111	Data Offset and Flags
 bit 112 - 127	Window
-bit 128 - 143	Checksum (A change, nothing needed to do, BPF helper will calculate)
+bit 128 - 143	Checksum (A change, must be calculated manually or with bpf_l4_csum_replace helper)
 bit 144 - 159	Urgent Pointer (A change, set it to 0)
 ```
 
@@ -156,7 +156,7 @@ bit 144 - 159	Urgent Pointer (A change, set it to 0)
                  +--------+--------+--------+--------+
                  |        destination address        |
                  +--------+--------+--------+--------+
-                 |  zero  |   TCP  |   UDP length    |
+                 |  zero  |   TCP  |   TCP length    |
                  +--------+--------+--------+--------+
 
  0                   1                   2                   3
@@ -206,15 +206,4 @@ bit 144 - 159	Urgent Pointer (A change, set it to 0)
 +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 |                              ...                              |
 +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-```
-
-```
-Modify IPv4 header: change checksum: calculate checksum. old data: bpf_htons(proto_old), new data: bpf_htons(proto)
-Modify TCP header: change checksum: calculate checksum. old data: bpf_htons(proto_old), new data: bpf_htons(proto)
-Modify TCP-in-UDP header: change checksum: calculate checksum. old data: urgent pointer (0), new data: length
-
-Modify IPv4 header: change protocol: set from TCP to UDP.
-Modify TCP-in-UDP header: tinuhdr_addr->udphdr.len = bpf_htons(ip_payload_len);
-Modify TCP-in-UDP header: tinuhdr_addr->udphdr.check = tcphdr_addr->check;
-Modify TCP-in-UDP header: tinuhdr_addr->seq = tcphdr_addr->seq;
 ```
