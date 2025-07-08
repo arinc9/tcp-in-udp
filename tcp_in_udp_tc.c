@@ -115,6 +115,26 @@ tcp_checksum(struct __sk_buff *skb, __u8 ip_off, __u8 udp_off, int ip_payload_le
 				 IPPROTO_TCP, sum);
 }
 
+static __always_inline __sum16
+udp_checksum(struct __sk_buff *skb, __u8 ip_off, __u8 udp_off)
+{
+	void *data_end = (void *)(long)skb->data_end;
+	void *data = (void *)(long)skb->data;
+	struct iphdr *iph = data + ip_off;
+	struct udphdr *udph = data + udp_off;
+	unsigned long sum;
+
+	if ((void *)iph + sizeof(*iph) > data_end ||
+	    (void *)udph + sizeof(*udph) > data_end) {
+		bpf_printk("udp checksum size not OK\n");
+		return -1;
+	}
+
+	sum = csum_partial(udph, bpf_ntohs(udph->len), data_end);
+	return csum_tcpudp_magic(iph->saddr, iph->daddr, bpf_ntohs(udph->len),
+				 IPPROTO_UDP, sum);
+}
+
 static __always_inline void tinu_to_tcp(struct __sk_buff *skb_addr,
 					struct iphdr *iphdr_addr,
 					struct ipv6hdr *ipv6hdr_addr,
@@ -126,7 +146,7 @@ static __always_inline void tinu_to_tcp(struct __sk_buff *skb_addr,
 	char buffer[TCP_MAX_HEADER];
 	struct tcphdr *tcphdr_addr;
 	__u8 proto = IPPROTO_TCP;
-	__sum16 diff_csum;
+	__be16 diff_csum;
 	int ip_off = (void *)iphdr_addr - data_addr;
 	int tinu_off = (void *)tinuhdr_addr - data_addr;
 	int ip_payload_len = (void *)(long)skb_addr->data_end - (void *)tinuhdr_addr;
@@ -175,6 +195,9 @@ static __always_inline void tcp_to_tinu(struct __sk_buff *skb_addr,
 	unsigned char tcp_hdr_max[TCP_MAX_HEADER];
 	struct tinuhdr *tinuhdr_addr;
 	__u8 proto = IPPROTO_UDP;
+	__be16 diff_csum;
+	int ip_off = (void *)iphdr_addr - data_addr;
+	int tcp_off = (void *)tcphdr_addr - data_addr;
 
 	bpf_skb_load_bytes(skb_addr, (void *)tcphdr_addr - data_addr, tcp_hdr_max,
 			   tcp_hdr_len);
@@ -196,6 +219,10 @@ static __always_inline void tcp_to_tinu(struct __sk_buff *skb_addr,
 		bpf_l3_csum_replace(skb_addr,
 				    (void *)&iphdr_addr->check - data_addr,
 				    bpf_htons(proto_old), bpf_htons(proto), 2);
+
+		diff_csum = udp_checksum(skb_addr, ip_off, tcp_off);
+		bpf_skb_store_bytes(skb_addr, tcp_off + offsetof(struct udphdr, check),
+				    &diff_csum, sizeof(diff_csum), 0);
 	} else if (ipv6hdr_addr) {
 		bpf_skb_store_bytes(skb_addr,
 				    (void *)&ipv6hdr_addr->nexthdr -
