@@ -112,7 +112,7 @@ tcp_checksum(struct __sk_buff *skb, __u8 ip_off, __u8 udp_off, int ip_payload_le
 
 	sum = csum_partial(udph, ip_payload_len, data_end);
 	return csum_tcpudp_magic(iph->saddr, iph->daddr, ip_payload_len,
-				 IPPROTO_UDP, sum);
+				 IPPROTO_TCP, sum);
 }
 
 static __always_inline void tinu_to_tcp(struct __sk_buff *skb_addr,
