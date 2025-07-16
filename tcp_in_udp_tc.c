@@ -335,7 +335,8 @@ int tc_tcp_in_udp(struct __sk_buff *skb)
 	} else if (eth_type == bpf_htons(ETH_P_IPV6)) {
 		ip_type = parse_ip6hdr(&nh, data_end, &ipv6hdr);
 	} else {
-		goto out;
+		nh.pos = data;
+		ip_type = parse_iphdr(&nh, data_end, &iphdr);
 	}
 
 	if (ip_type == IPPROTO_TCP)
