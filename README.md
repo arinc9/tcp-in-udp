@@ -114,14 +114,18 @@ Load it with `tc` command:
 - Client:
   ```
   tc qdisc add dev "${IFACE}" clsact
-  tc filter add dev "${IFACE}" egress  bpf obj tcp_in_udp_tc.o sec tc_client_egress action csum udp
-  tc filter add dev "${IFACE}" ingress bpf da obj tcp_in_udp_tc.o sec tc_client_ingress
+  tc filter add dev "${IFACE}" egress  protocol ip flower ip_proto tcp dst_port ${PORT_START}-${PORT_END} action goto chain 1
+  tc filter add dev "${IFACE}" egress  chain 1 bpf object-file tcp_in_udp_tc.o section tc action csum udp
+  tc filter add dev "${IFACE}" ingress protocol ip flower ip_proto udp src_port ${PORT_START}-${PORT_END} action goto chain 1
+  tc filter add dev "${IFACE}" ingress chain 1 bpf object-file tcp_in_udp_tc.o section tc direct-action
   ```
 - Server:
   ```
   tc qdisc add dev "${IFACE}" clsact
-  tc filter add dev "${IFACE}" egress  bpf obj tcp_in_udp_tc.o sec tc_server_egress action csum udp
-  tc filter add dev "${IFACE}" ingress bpf da obj tcp_in_udp_tc.o sec tc_server_ingress
+  tc filter add dev "${IFACE}" egress  protocol ip flower ip_proto tcp src_port ${PORT_START}-${PORT_END} action goto chain 1
+  tc filter add dev "${IFACE}" egress  chain 1 bpf object-file tcp_in_udp_tc.o section tc action csum udp
+  tc filter add dev "${IFACE}" ingress protocol ip flower ip_proto udp dst_port ${PORT_START}-${PORT_END} action goto chain 1
+  tc filter add dev "${IFACE}" ingress chain 1 bpf object-file tcp_in_udp_tc.o section tc direct-action
   ```
 
 GRO/TSO cannot be used on this interface, because each UDP packet will carry a
@@ -166,10 +170,10 @@ might be required to adapt the MTU (or the MSS).
 
 ### Client side:
 
-- Ingress: From a specific destination IP and port in UDP
-- Egress: To a specific destination IP and port in TCP
+- Ingress: A specific sport in TCP-in-UDP
+- Egress: A specific dport in TCP
 
 ### Server side:
 
-- Ingress: To a specific destination IP and port in UDP
-- Egress: From a previously used `sk`: use ConnMark to set a specific `SO_MARK`
+- Ingress: A specific dport in TCP-in-UDP
+- Egress: A specific sport in TCP
