@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0 */
 #include <linux/bpf.h>
 #include <linux/if_ether.h>
+#include <linux/if_packet.h>
 #include <linux/in.h>
 #include <linux/ip.h>
 #include <linux/ipv6.h>
@@ -340,9 +341,9 @@ int tc_tcp_in_udp(struct __sk_buff *skb)
 			goto out;
 	}
 
-	if (ip_type == IPPROTO_TCP)
+	if (skb->pkt_type == PACKET_OUTGOING && ip_type == IPPROTO_TCP)
 		return tcp_to_udp(skb, &nh, iphdr, ipv6hdr);
-	if (ip_type == IPPROTO_UDP)
+	if (skb->pkt_type == PACKET_HOST && ip_type == IPPROTO_UDP)
 		udp_to_tcp(skb, &nh, iphdr, ipv6hdr);
 
 out:
